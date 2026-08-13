@@ -1,8 +1,5 @@
-mod error;
+use anyhow::{Context, Result};
 use clap::Parser;
-use color_eyre::eyre::Result;
-use color_eyre::owo_colors::OwoColorize;
-use error::Error;
 use inquire::Select;
 use ssh2_config::{ParseRule, SshConfig, SshParserResult};
 use std::env;
@@ -15,52 +12,72 @@ use std::process::Command;
 #[derive(Parser)]
 #[command(version)]
 pub struct Args {
-    /// Use this config file
     #[arg(short, long)]
     config: Option<String>,
 }
 
 struct HostEntry {
-    name: String,
+    label: String,
     host: String,
     user: Option<String>,
+    port: Option<u16>,
+}
+
+impl HostEntry {
+    fn get_ssh_cmd(self) -> String {
+        let cmd = if let Some(user) = self.user {
+            format!("ssh {}@{}", user, self.label)
+        } else {
+            format!("ssh {}", self.label)
+        };
+
+        if let Some(port) = self.port {
+            cmd + &format!(" -p {}", port)
+        } else {
+            cmd
+        }
+    }
 }
 
 impl Display for HostEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.name, self.host.bright_black())
+        write!(f, "{} {}", self.label, self.host)
     }
 }
 
 fn get_hosts(config: &SshConfig) -> Vec<HostEntry> {
-    let hosts = config
+    config
         .get_hosts()
         .iter()
         .filter_map(|host| {
-            host.pattern
-                .first()
-                .filter(|hc| hc.pattern != "*")
-                .and_then(|_| {
-                    host.params.host_name.clone().map(|host_name| HostEntry {
-                        name: host.pattern.first().unwrap().pattern.clone(),
-                        host: host_name,
-                        user: host.params.user.clone(),
-                    })
-                })
-        })
-        .collect::<Vec<_>>();
+            let target = host.pattern.first()?;
 
-    hosts
+            if target.pattern == "*" {
+                return None;
+            }
+
+            Some(HostEntry {
+                label: target.pattern.clone(),
+                host: host.params.host_name.clone()?,
+                user: host.params.user.clone(),
+                port: host.params.port,
+            })
+        })
+        .collect()
 }
 
 fn get_config_file(args: &Args) -> Result<File> {
-    let home_dir = env::var("HOME")?;
-    let ssh_config = home_dir + "/.ssh/config";
-    let config = args.config.clone().unwrap_or(ssh_config);
+    if let Some(config) = &args.config {
+        let path = PathBuf::from(config);
+        Ok(File::open(&path)
+            .with_context(|| format!("Failed to read config from \"{}\"", config))?)
+    } else {
+        let home_dir = env::var("HOME")?;
+        let config = home_dir + "/.ssh/config";
+        let path = PathBuf::from(config);
 
-    let path = PathBuf::from(config);
-
-    Ok(File::open(path)?)
+        Ok(File::open(path).context("No config file found")?)
+    }
 }
 
 fn parse_config(file: File) -> SshParserResult<SshConfig> {
@@ -69,36 +86,76 @@ fn parse_config(file: File) -> SshParserResult<SshConfig> {
 }
 
 fn main() -> Result<()> {
-    color_eyre::install()?;
     let args = Args::parse();
 
-    let term = env::var("TERM")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .ok_or(Error::TermNotSet)?;
-
     let config_file = get_config_file(&args)?;
-    let config = parse_config(config_file)?;
+    let config = parse_config(config_file).context("Failed to parse config file")?;
 
     let hosts = get_hosts(&config);
-    let host = Select::new("Select host:", hosts).prompt()?;
+    let host = Select::new("Host:", hosts).prompt()?;
 
-    let ssh_cmd = if let Some(user) = host.user {
-        format!("ssh {}@{}", user, host.name)
-    } else {
-        format!("ssh {}", host.name)
-    };
+    let ssh_cmd = host.get_ssh_cmd();
 
-    let output = Command::new("bash")
+    let mut child = Command::new("bash")
         .arg("-c")
-        .arg(format!("{term} -e bash -c '{ssh_cmd}'"))
-        .output()?;
+        .arg(ssh_cmd)
+        .spawn()
+        .context("Failed to spawn ssh command")?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if !stderr.is_empty() {
-        print!("{stderr}");
-    }
+    child.wait()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_cmd_format_no_user_no_port() {
+        let host = HostEntry {
+            host: String::from("127.0.0.1"),
+            label: String::from("localhost"),
+            user: None,
+            port: None,
+        };
+
+        assert_eq!(host.get_ssh_cmd(), "ssh localhost");
+    }
+
+    #[test]
+    fn ssh_cmd_format_with_user() {
+        let host = HostEntry {
+            host: String::from("127.0.0.1"),
+            label: String::from("localhost"),
+            user: Some(String::from("root")),
+            port: None,
+        };
+
+        assert_eq!(host.get_ssh_cmd(), "ssh root@localhost");
+    }
+
+    #[test]
+    fn ssh_cmd_format_with_port() {
+        let host = HostEntry {
+            host: String::from("127.0.0.1"),
+            label: String::from("localhost"),
+            user: None,
+            port: Some(666),
+        };
+
+        assert_eq!(host.get_ssh_cmd(), "ssh localhost -p 666");
+    }
+
+    #[test]
+    fn ssh_cmd_format_with_user_and_port() {
+        let host = HostEntry {
+            host: String::from("127.0.0.1"),
+            label: String::from("localhost"),
+            user: Some(String::from("root")),
+            port: Some(666),
+        };
+
+        assert_eq!(host.get_ssh_cmd(), "ssh root@localhost -p 666");
+    }
 }
