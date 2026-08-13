@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use inquire::Select;
 use ssh2_config::{ParseRule, SshConfig, SshParserResult};
@@ -14,53 +14,58 @@ use std::process::Command;
 pub struct Args {
     #[arg(short, long)]
     config: Option<String>,
-}
 
-struct HostEntry {
-    label: String,
-    host: String,
+    #[arg(short, long, help = "Filter by subnet")]
+    subnet: Option<String>,
+
+    #[arg(short, long, help = "Override user")]
     user: Option<String>,
-    port: Option<u16>,
 }
 
-impl HostEntry {
-    fn get_ssh_cmd(self) -> String {
-        let cmd = if let Some(user) = self.user {
+struct HostMapping {
+    label: String,
+    address: String,
+    user: Option<String>,
+}
+
+impl HostMapping {
+    fn ssh_cmd(self) -> String {
+        if let Some(user) = self.user {
             format!("ssh {}@{}", user, self.label)
         } else {
             format!("ssh {}", self.label)
-        };
-
-        if let Some(port) = self.port {
-            cmd + &format!(" -p {}", port)
-        } else {
-            cmd
         }
     }
 }
 
-impl Display for HostEntry {
+impl Display for HostMapping {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.label, self.host)
+        write!(f, "{} {}", self.label, self.address)
     }
 }
 
-fn get_hosts(config: &SshConfig) -> Vec<HostEntry> {
+fn get_hosts(config: &SshConfig, args: &Args) -> Vec<HostMapping> {
     config
         .get_hosts()
         .iter()
         .filter_map(|host| {
             let target = host.pattern.first()?;
+            let host_name = host.params.host_name.clone()?;
+
+            if let Some(subnet) = &args.subnet
+                && !host_name.starts_with(subnet)
+            {
+                return None;
+            }
 
             if target.pattern == "*" {
                 return None;
             }
 
-            Some(HostEntry {
+            Some(HostMapping {
                 label: target.pattern.clone(),
-                host: host.params.host_name.clone()?,
-                user: host.params.user.clone(),
-                port: host.params.port,
+                address: host_name,
+                user: args.user.clone(),
             })
         })
         .collect()
@@ -91,10 +96,15 @@ fn main() -> Result<()> {
     let config_file = get_config_file(&args)?;
     let config = parse_config(config_file).context("Failed to parse config file")?;
 
-    let hosts = get_hosts(&config);
+    let hosts = get_hosts(&config, &args);
+
+    if hosts.is_empty() {
+        return Err(anyhow!("No hosts found"));
+    }
+
     let host = Select::new("Host:", hosts).prompt()?;
 
-    let ssh_cmd = host.get_ssh_cmd();
+    let ssh_cmd = host.ssh_cmd();
 
     let mut child = Command::new("bash")
         .arg("-c")
@@ -112,50 +122,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ssh_cmd_format_no_user_no_port() {
-        let host = HostEntry {
-            host: String::from("127.0.0.1"),
-            label: String::from("localhost"),
-            user: None,
-            port: None,
-        };
-
-        assert_eq!(host.get_ssh_cmd(), "ssh localhost");
-    }
-
-    #[test]
     fn ssh_cmd_format_with_user() {
-        let host = HostEntry {
-            host: String::from("127.0.0.1"),
+        let host = HostMapping {
             label: String::from("localhost"),
+            address: String::from("127.0.0.1"),
             user: Some(String::from("root")),
-            port: None,
         };
 
-        assert_eq!(host.get_ssh_cmd(), "ssh root@localhost");
+        assert_eq!(host.ssh_cmd(), "ssh root@localhost");
     }
 
     #[test]
-    fn ssh_cmd_format_with_port() {
-        let host = HostEntry {
-            host: String::from("127.0.0.1"),
+    fn ssh_cmd_format_no_user() {
+        let host = HostMapping {
             label: String::from("localhost"),
+            address: String::from("127.0.0.1"),
             user: None,
-            port: Some(666),
         };
 
-        assert_eq!(host.get_ssh_cmd(), "ssh localhost -p 666");
-    }
-
-    #[test]
-    fn ssh_cmd_format_with_user_and_port() {
-        let host = HostEntry {
-            host: String::from("127.0.0.1"),
-            label: String::from("localhost"),
-            user: Some(String::from("root")),
-            port: Some(666),
-        };
-
-        assert_eq!(host.get_ssh_cmd(), "ssh root@localhost -p 666");
+        assert_eq!(host.ssh_cmd(), "ssh localhost");
     }
 }
