@@ -1,4 +1,4 @@
-Dead simple ssh_config TUI for linux written in ~100 lines.
+Dead simple ssh_config TUI for linux
 
 ### Install
 
