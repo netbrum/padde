@@ -15,8 +15,8 @@ pub struct Args {
     #[arg(short, long)]
     config: Option<String>,
 
-    #[arg(short, long, help = "Filter by subnet")]
-    subnet: Option<String>,
+    #[arg(short, long, help = "Prefix filter")]
+    prefix: Option<String>,
 
     #[arg(short, long, help = "Override user")]
     user: Option<String>,
@@ -29,11 +29,11 @@ struct HostMapping {
 }
 
 impl HostMapping {
-    fn ssh_cmd(self) -> String {
+    fn ssh_args(self) -> String {
         if let Some(user) = self.user {
-            format!("ssh {}@{}", user, self.label)
+            format!("{}@{}", user, self.label)
         } else {
-            format!("ssh {}", self.label)
+            format!("{}", self.label)
         }
     }
 }
@@ -52,8 +52,8 @@ fn get_hosts(config: &SshConfig, args: &Args) -> Vec<HostMapping> {
             let target = host.pattern.first()?;
             let host_name = host.params.host_name.clone()?;
 
-            if let Some(subnet) = &args.subnet
-                && !host_name.starts_with(subnet)
+            if let Some(prefix) = &args.prefix
+                && !host_name.starts_with(prefix)
             {
                 return None;
             }
@@ -104,11 +104,8 @@ fn main() -> Result<()> {
 
     let host = Select::new("Host:", hosts).prompt()?;
 
-    let ssh_cmd = host.ssh_cmd();
-
-    let mut child = Command::new("bash")
-        .arg("-c")
-        .arg(ssh_cmd)
+    let mut child = Command::new("ssh")
+        .arg(host.ssh_args())
         .spawn()
         .context("Failed to spawn ssh command")?;
 
@@ -122,24 +119,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ssh_cmd_format_with_user() {
+    fn ssh_args_format_with_user() {
         let host = HostMapping {
             label: String::from("localhost"),
             address: String::from("127.0.0.1"),
             user: Some(String::from("root")),
         };
 
-        assert_eq!(host.ssh_cmd(), "ssh root@localhost");
+        assert_eq!(host.ssh_args(), "root@localhost");
     }
 
     #[test]
-    fn ssh_cmd_format_no_user() {
+    fn ssh_args_format_no_user() {
         let host = HostMapping {
             label: String::from("localhost"),
             address: String::from("127.0.0.1"),
             user: None,
         };
 
-        assert_eq!(host.ssh_cmd(), "ssh localhost");
+        assert_eq!(host.ssh_args(), "localhost");
     }
 }
