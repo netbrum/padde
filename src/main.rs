@@ -2,7 +2,6 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use inquire::Select;
 use ssh2_config::{ParseRule, SshConfig, SshParserResult};
-use std::collections::HashMap;
 use std::env;
 use std::fmt::Display;
 use std::fs::File;
@@ -16,13 +15,15 @@ pub struct Args {
     #[arg(short, long, help = "Use this config file")]
     config: Option<String>,
 
-    #[arg(short, long, help = "Override user")]
+    #[arg(short, long, help = "Use this user")]
     user: Option<String>,
 }
 
+#[derive(Debug)]
 struct HostMapping {
     alias: String,
     host: String,
+    user: Option<String>,
     user_override: Option<String>,
 }
 
@@ -38,16 +39,16 @@ impl HostMapping {
 
 impl Display for HostMapping {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(user) = &self.user_override {
-            write!(f, "{}@{}/{}", user, self.alias, self.host)
-        } else {
-            write!(f, "{}/{}", self.alias, self.host)
+        match (&self.user, &self.user_override) {
+            (Some(user), None) => write!(f, "{}@{} ({})", user, self.alias, self.host),
+            (_, Some(user)) => write!(f, "{}@{} ({})", user, self.alias, self.host),
+            (None, None) => write!(f, "{} ({})", self.alias, self.host),
         }
     }
 }
 
 fn get_host_mappings(config: &SshConfig, args: &Args) -> Vec<HostMapping> {
-    let mut hosts: HashMap<String, Vec<String>> = HashMap::new();
+    let mut hosts: Vec<HostMapping> = Vec::new();
 
     for host in config.get_hosts() {
         for clause in &host.pattern {
@@ -59,27 +60,17 @@ fn get_host_mappings(config: &SshConfig, args: &Args) -> Vec<HostMapping> {
             }
 
             if let Some(host_name) = &host.params.host_name {
-                hosts
-                    .entry(host_name.clone())
-                    .or_default()
-                    .push(clause.pattern.clone());
+                hosts.push(HostMapping {
+                    alias: clause.pattern.clone(),
+                    host: host_name.clone(),
+                    user: host.params.user.clone(),
+                    user_override: args.user.clone(),
+                })
             }
         }
     }
 
     hosts
-        .into_iter()
-        .flat_map(|(hostname, aliases)| {
-            aliases
-                .into_iter()
-                .map(|alias| HostMapping {
-                    alias: alias.clone(),
-                    host: hostname.clone(),
-                    user_override: args.user.clone(),
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
 }
 
 fn get_config_file(args: &Args) -> Result<File> {
@@ -156,6 +147,8 @@ Host foo
             },
         );
 
+        dbg!(&hosts);
+
         let has_mapping = hosts
             .iter()
             .find(|h| h.alias == "foo" && h.host == "10.0.0.1")
@@ -203,33 +196,11 @@ HostName 10.0.0.2
     }
 
     #[test]
-    fn get_host_mappings_ignores_stanza_user() {
-        let config = parse_config_from_str(
-            r#"
-Host foo
-  HostName 10.0.0.1
-  User bar
-"#,
-        );
-
-        let hosts = get_host_mappings(
-            &config,
-            &Args {
-                config: None,
-                user: None,
-            },
-        );
-
-        let no_user_overrides = hosts.iter().all(|h| h.user_override.is_none());
-
-        assert!(no_user_overrides);
-    }
-
-    #[test]
-    fn ssh_args_format_with_user() {
+    fn ssh_args_format_with_user_override() {
         let host = HostMapping {
             alias: String::from("localhost"),
             host: String::from("127.0.0.1"),
+            user: None,
             user_override: Some(String::from("root")),
         };
 
@@ -237,10 +208,23 @@ Host foo
     }
 
     #[test]
+    fn ssh_args_format_with_user_and_user_override() {
+        let host = HostMapping {
+            alias: String::from("localhost"),
+            host: String::from("127.0.0.1"),
+            user: Some(String::from("foo")),
+            user_override: Some(String::from("bar")),
+        };
+
+        assert_eq!(host.ssh_args(), "bar@localhost");
+    }
+
+    #[test]
     fn ssh_args_format_no_user() {
         let host = HostMapping {
             alias: String::from("localhost"),
             host: String::from("127.0.0.1"),
+            user: None,
             user_override: None,
         };
 
