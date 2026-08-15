@@ -6,17 +6,22 @@ use std::env;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::BufReader;
+use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
-#[derive(Parser)]
+#[derive(Parser, Default)]
 #[command(version)]
 pub struct Args {
     #[arg(short, long, help = "Use this config file")]
     config: Option<String>,
 
-    #[arg(short, long, help = "Use this user")]
+    #[arg(short, long, help = "Override the user")]
     user: Option<String>,
+
+    #[arg(short, long, default_value_t = 100, help = "Ping timeout")]
+    timeout: u64,
 }
 
 #[derive(Debug)]
@@ -25,6 +30,7 @@ struct HostMapping {
     host: String,
     user: Option<String>,
     user_override: Option<String>,
+    online: bool,
 }
 
 impl HostMapping {
@@ -39,10 +45,12 @@ impl HostMapping {
 
 impl Display for HostMapping {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let status = if self.online { "Online" } else { "Offline" };
+
         match (&self.user, &self.user_override) {
-            (Some(user), None) => write!(f, "{}@{} ({})", user, self.alias, self.host),
-            (_, Some(user)) => write!(f, "{}@{} ({})", user, self.alias, self.host),
-            (None, None) => write!(f, "{} ({})", self.alias, self.host),
+            (Some(user), None) => write!(f, "{}@{} ({}) • {}", user, self.alias, self.host, status),
+            (_, Some(user)) => write!(f, "{}@{} ({}) • {}", user, self.alias, self.host, status),
+            (None, None) => write!(f, "{} ({}) • {}", self.alias, self.host, status),
         }
     }
 }
@@ -60,11 +68,27 @@ fn get_host_mappings(config: &SshConfig, args: &Args) -> Vec<HostMapping> {
             }
 
             if let Some(host_name) = &host.params.host_name {
+                let ip = if let Ok(mut addr) = (host_name.to_owned() + ":0").to_socket_addrs() {
+                    addr.next().map(|next| next.ip())
+                } else {
+                    None
+                };
+
+                let online = if let Some(ip) = ip {
+                    ping::new(ip)
+                        .timeout(Duration::from_millis(args.timeout))
+                        .send()
+                        .is_ok()
+                } else {
+                    false
+                };
+
                 hosts.push(HostMapping {
                     alias: clause.pattern.clone(),
                     host: host_name.clone(),
                     user: host.params.user.clone(),
                     user_override: args.user.clone(),
+                    online,
                 })
             }
         }
@@ -139,13 +163,7 @@ Host foo
 "#,
         );
 
-        let hosts = get_host_mappings(
-            &config,
-            &Args {
-                config: None,
-                user: None,
-            },
-        );
+        let hosts = get_host_mappings(&config, &Args::default());
 
         dbg!(&hosts);
 
@@ -169,13 +187,7 @@ HostName 10.0.0.2
 "#,
         );
 
-        let hosts = get_host_mappings(
-            &config,
-            &Args {
-                config: None,
-                user: None,
-            },
-        );
+        let hosts = get_host_mappings(&config, &Args::default());
 
         let has_foo = hosts
             .iter()
@@ -202,6 +214,7 @@ HostName 10.0.0.2
             host: String::from("127.0.0.1"),
             user: None,
             user_override: Some(String::from("root")),
+            online: false,
         };
 
         assert_eq!(host.ssh_args(), "root@localhost");
@@ -214,6 +227,7 @@ HostName 10.0.0.2
             host: String::from("127.0.0.1"),
             user: Some(String::from("foo")),
             user_override: Some(String::from("bar")),
+            online: false,
         };
 
         assert_eq!(host.ssh_args(), "bar@localhost");
@@ -226,6 +240,7 @@ HostName 10.0.0.2
             host: String::from("127.0.0.1"),
             user: None,
             user_override: None,
+            online: false,
         };
 
         assert_eq!(host.ssh_args(), "localhost");

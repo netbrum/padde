@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 inquire = "0.9.4"
+ping = "0.9.0"
 ssh2-config = "0.7.2"
 
 [dev-dependencies]
