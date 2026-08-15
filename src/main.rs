@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use inquire::Select;
+use owo_colors::OwoColorize;
 use ssh2_config::{ParseRule, SshConfig, SshParserResult};
 use std::env;
 use std::fmt::Display;
@@ -45,12 +46,30 @@ impl HostMapping {
 
 impl Display for HostMapping {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let status = if self.online { "Online" } else { "Offline" };
+        let status = if self.online {
+            "•".bright_green().to_string()
+        } else {
+            "•".bright_red().to_string()
+        };
 
         match (&self.user, &self.user_override) {
-            (Some(user), None) => write!(f, "{}@{} ({}) • {}", user, self.alias, self.host, status),
-            (_, Some(user)) => write!(f, "{}@{} ({}) • {}", user, self.alias, self.host, status),
-            (None, None) => write!(f, "{} ({}) • {}", self.alias, self.host, status),
+            (Some(user), None) => write!(
+                f,
+                "{} {}@{} {}",
+                status,
+                user,
+                self.alias,
+                self.host.black()
+            ),
+            (_, Some(user)) => write!(
+                f,
+                "{} {}@{} {}",
+                status,
+                user,
+                self.alias,
+                self.host.black()
+            ),
+            (None, None) => write!(f, "{} {} {}", status, self.alias, self.host.black()),
         }
     }
 }
