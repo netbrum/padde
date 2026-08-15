@@ -13,7 +13,7 @@ use std::process::Command;
 #[derive(Parser)]
 #[command(version)]
 pub struct Args {
-    #[arg(short, long)]
+    #[arg(short, long, help = "Use this config file")]
     config: Option<String>,
 
     #[arg(short, long, help = "Override user")]
