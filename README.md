@@ -1,6 +1,6 @@
 ## Padde
 
-Dead simple ssh_config TUI for linux.
+Dead simple ssh_config TUI.
 
 ### Install
 

@@ -118,15 +118,14 @@ fn get_host_mappings(config: &SshConfig, args: &Args) -> Vec<HostMapping> {
 
 fn get_config_file(args: &Args) -> Result<File> {
     if let Some(config) = &args.config {
-        let path = PathBuf::from(config);
-        Ok(File::open(&path)
+        let config_file = PathBuf::from(config);
+        Ok(File::open(&config_file)
             .with_context(|| format!("Failed to read config from \"{}\"", config))?)
     } else {
-        let home_dir = env::var("HOME")?;
-        let config = home_dir + "/.ssh/config";
-        let path = PathBuf::from(config);
+        let home_dir = env::home_dir().context("Failed to find home directory")?;
+        let config_file = home_dir.join(PathBuf::from(".ssh/config"));
 
-        Ok(File::open(path).context("No config file found")?)
+        Ok(File::open(config_file).context("No config file found")?)
     }
 }
 
