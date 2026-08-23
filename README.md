@@ -10,7 +10,7 @@ cargo install --git https://github.com/netbrum/padde
 
 ### Usage
 
-By default `padde` looks for a config file in `$HOME/.ssh/config`.
+By default `padde` looks for a config file in your home directory (`$HOME/.ssh/config` for unix, `%USERPROFILE%\.ssh\config` for windows).
 
 Upon running the program, you'll be met with a selection like the below example.
 
